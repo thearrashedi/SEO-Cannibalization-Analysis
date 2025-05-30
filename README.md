@@ -35,7 +35,7 @@ A powerful tool for detecting and analyzing keyword cannibalization issues in yo
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/keyword-cannibalization.git
+git clone https://github.com/Danobin/SEO-Cannibalization-Analysis.git
 cd keyword-cannibalization
 ```
 
