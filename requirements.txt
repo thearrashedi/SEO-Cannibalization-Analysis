@@ -19,3 +19,4 @@ htmlmin>=0.1.12
 hazm>=0.9.3
 langchain-openai  # <-- The new line you just added!
 python-multipart  # <-- The final package!
+google-generativeai
