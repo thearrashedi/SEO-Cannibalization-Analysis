@@ -3,11 +3,11 @@ uvicorn>=0.27.0
 streamlit>=1.31.0
 gspread>=5.12.0
 oauth2client>=4.1.3
-pandas==1.5.3  # Pinned for compatibility
-numpy==1.24.4  # Pinned for compatibility with older scipy/gensim
+pandas==1.5.3
+numpy==1.24.4
 openpyxl>=3.1.0
-scipy==1.10.1   # Pinned to a version compatible with gensim
-gensim==4.3.0   # Pinned to a specific version
+scipy==1.10.1
+gensim==4.3.1   # <-- The ONLY change is here!
 scikit-learn>=1.4.0
 thefuzz>=0.20.0
 python-Levenshtein>=0.23.0
