@@ -1,178 +1,187 @@
 import streamlit as st
 import pandas as pd
-import json
-from keyword_cannibalization import run_cannibalization_analysis
 import google.generativeai as genai
+from keyword_cannibalization import run_cannibalization_analysis
+import altair as alt
 
 # --- 1. Page Configuration ---
 st.set_page_config(
-    page_title="تحلیل هم‌نوع‌خواری SEO",
-    page_icon="✨",
+    page_title="تحلیل هوشمند هم‌نوع‌خواری SEO",
+    page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- 2. Custom CSS for a cleaner look ---
+# --- 2. Session State Initialization ---
+# This is crucial for a professional app. It preserves results across reruns.
+if 'results' not in st.session_state:
+    st.session_state.results = None
+if 'running' not in st.session_state:
+    st.session_state.running = False
+
+# --- 3. Custom UI Enhancements ---
 st.markdown("""
 <style>
+    /* General Style Improvements */
+    .stApp {
+        background-color: #FFFFFF;
+    }
     .stButton>button {
-        border-radius: 10px;
+        border-radius: 8px;
+        border: 2px solid #FF4B4B;
+        color: #FF4B4B;
+        background-color: transparent;
+        transition: all 0.2s ease-in-out;
     }
-    .stTextInput>div>div>input {
-        border-radius: 10px;
+    .stButton>button:hover {
+        border-color: #FF4B4B;
+        background-color: #FF4B4B;
+        color: white;
     }
-    .stFileUploader>div>div>button {
-        border-radius: 10px;
+    .stButton>button:disabled {
+        border: 1px solid #E0E0E0;
+        background-color: #F0F2F6;
+        color: #A0A0A0;
     }
     [data-testid="stSidebar"] {
-        background-color: #f0f2f6;
+        background-color: #F8F9FA;
+        border-right: 1px solid #E6E6E6;
     }
-    h1, h2, h3 {
-        color: #1a1a1a;
+    [data-testid="stMetric"] {
+        background-color: #F8F9FA;
+        border-radius: 10px;
+        padding: 15px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. Sidebar for Inputs ---
+# --- 4. Helper function to make URLs in DataFrame clickable ---
+def make_urls_clickable(df):
+    """Adds clickable HTML links to the 'URLs' column."""
+    if 'URLs' in df.columns:
+        df['URLs'] = df['URLs'].apply(
+            lambda x: ' | '.join([f'<a href="{url.strip()}" target="_blank">{url.strip()}</a>' for url in x.split('|')]) if isinstance(x, str) else x
+        )
+    return df
+
+# --- 5. Sidebar UI for Inputs ---
 with st.sidebar:
-    st.image("https://i.imgur.com/g4f4g4a.png", width=100) # Replace with your logo if you have one
-    st.title("تنظیمات تحلیل")
-    st.markdown("پارامترهای تحلیل خود را در اینجا وارد کنید.")
-
-    # Gemini API Key Input
-    api_key = st.text_input(
-        "🔑 کلید Google AI API",
-        type="password",
-        placeholder="AIzaSy...",
-        help="برای استفاده از مدل Gemini جهت تحلیل موضوعی، کلید خود را از [Google AI Studio](https://aistudio.google.com/app/apikey) دریافت کنید."
-    )
-
-    # Website Domain Input
-    site_url = st.text_input(
-        "🌐 آدرس وب‌سایت",
-        placeholder="https://aiprovider.org",
-        help="آدرس کامل وب‌سایت مورد تحلیل."
-    )
-
-    # Country Selection
-    country = st.selectbox(
-        "🌍 کشور",
-        ['ir', 'us', 'de', 'fr', 'es', 'it', 'uk', 'ca', 'au'],
-        index=0,
-        help="کشور مورد نظر برای بررسی رتبه‌بندی."
-    )
-
-    # File Uploader
-    uploaded_file = st.file_uploader(
-        "📂 فایل اکسل (Keyword & URL)",
-        type=['xlsx'],
-        help="فایل اکسل باید دو ستون به نام‌های 'Keyword' و 'URL' داشته باشد."
-    )
+    st.image("https://i.imgur.com/g4f4g4a.png", width=120) # A slightly larger logo
+    st.title("پارامترهای تحلیل")
+    
+    api_key = st.text_input("🔑 کلید Google AI API", type="password", placeholder="AIzaSy...", help="کلید خود را از [Google AI Studio](https://aistudio.google.com/app/apikey) دریافت کنید.")
+    site_url = st.text_input("🌐 دامنه وب‌سایت", placeholder="aiprovider.org", help="دامنه اصلی وب‌سایت بدون https.")
+    
+    uploaded_file = st.file_uploader("📂 فایل اکسل", type=['xlsx'], help="فایل اکسل باید ستون‌هایی برای کلمات کلیدی و URLها داشته باشد.")
 
     st.markdown("---")
-    # Analysis Button
-    run_button = st.button("🚀 شروع تحلیل", type="primary", use_container_width=True, disabled=(not uploaded_file or not api_key or not site_url))
+    
+    # The button now just toggles the 'running' state
+    if st.button("🚀 شروع تحلیل", type="primary", use_container_width=True, disabled=(not uploaded_file or not api_key or not site_url)):
+        st.session_state.running = True
 
-# --- 4. Main Panel with Tabs ---
-st.title("🔍 داشبورد تحلیل هم‌نوع‌خواری کلمات کلیدی")
+# --- 6. Main Panel Logic ---
+st.title("🧠 داشبورد هوشمند تحلیل هم‌نوع‌خواری")
 
-tab1, tab2, tab3 = st.tabs(["📊 نتایج تحلیل", "📄 راهنمای استفاده", "💡 درباره ابزار"])
-
-with tab1:
-    st.header("نتایج تحلیل شما")
-    if run_button:
-        # --- Run Analysis ---
+# A. If analysis is triggered
+if st.session_state.running:
+    with st.status("در حال اجرای تحلیل...", expanded=True) as status:
         try:
-            # Configure the Gemini client
+            status.update(label="مرحله ۱: اعتبارسنجی ورودی‌ها و پیکربندی Gemini...", state="running")
             genai.configure(api_key=api_key)
-
-            with st.spinner("لطفاً صبر کنید... در حال دریافت داده‌ها و تحلیل با هوش مصنوعی... این فرآیند ممکن است زمان‌بر باشد."):
-                df = pd.read_excel(uploaded_file)
-                st.info(f"✅ فایل با موفقیت خوانده شد. **{len(df)}** کلمه کلیدی برای تحلیل یافت شد.")
-                
-                # We pass the api_key via config, so keyword_cannibalization.py can use it
-                config = {
-                    "api_key": api_key,
-                    "site_url": site_url,
-                    "country": country,
-                    "model_provider": "gemini" # Let the backend know we are using Gemini
-                }
-
-                result_df, analysis_summary = run_cannibalization_analysis(df, config)
-
-            st.success("✅ تحلیل با موفقیت به پایان رسید!")
-
-            # --- Display Summary Metrics ---
-            st.subheader("خلاصه نتایج")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("کل کلمات کلیدی", analysis_summary.get('total_keywords', 'N/A'))
-            col2.metric("مشکلات یافت‌شده", analysis_summary.get('total_issues_found', 'N/A'), help="تعداد گروه‌هایی که بیش از یک URL برای یک موضوع دارند.")
-            col3.metric("موضوعات منحصر به فرد", analysis_summary.get('unique_topics', 'N/A'), help="تعداد دسته‌بندی‌های موضوعی که توسط Gemini شناسایی شد.")
+            df = pd.read_excel(uploaded_file)
             
-            # --- Display Full Results ---
-            st.subheader("جدول نتایج کامل")
-            st.dataframe(result_df, use_container_width=True)
+            config = {
+                "api_key": api_key,
+                "site_url": site_url,
+                "country": "ir", # Country is fixed for now, can be added to sidebar later if needed
+                "model_provider": "gemini"
+            }
+            status.update(label=f"مرحله ۲: خواندن {len(df)} ردیف از فایل و شروع دسته‌بندی با هوش مصنوعی...", state="running")
 
-            # --- Download Button ---
-            @st.cache_data
-            def convert_df_to_csv(df_to_convert):
-                return df_to_convert.to_csv(index=False).encode('utf-8-sig') # Use utf-8-sig for better Excel compatibility
-
-            csv = convert_df_to_csv(result_df)
-            st.download_button(
-                label="📥 دانلود نتایج به صورت CSV",
-                data=csv,
-                file_name='seo_cannibalization_results.csv',
-                mime='text/csv',
-                use_container_width=True
-            )
+            # Run the robust backend analysis function
+            result_df, analysis_summary = run_cannibalization_analysis(df, config)
+            
+            # Add a Severity Score for prioritization
+            result_df['Severity'] = (result_df['Unique URLs'] - 1) * result_df['Keyword Count']
+            
+            # Store results in session state
+            st.session_state.results = {'df': result_df, 'summary': analysis_summary}
+            
+            status.update(label="تحلیل با موفقیت کامل شد!", state="complete", expanded=False)
 
         except Exception as e:
-            st.error(f"❌ متاسفانه در حین تحلیل خطایی رخ داد:")
+            status.update(label="خطا در حین تحلیل!", state="error", expanded=True)
             st.exception(e)
+        
+        # Reset the running flag and rerun the script to display results
+        st.session_state.running = False
+        st.rerun()
+
+# B. If results exist in the session state, display them
+if st.session_state.results:
+    summary = st.session_state.results['summary']
+    results_df = st.session_state.results['df']
+
+    # --- Display Summary Metrics ---
+    st.subheader("📊 خلاصه مدیریتی")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("کل کلمات کلیدی تحلیل‌شده", summary.get('total_keywords', 'N/A'))
+    col2.metric("🚨 مشکلات هم‌نوع‌خواری", summary.get('total_issues_found', 'N/A'), help="تعداد موضوعاتی که بیش از یک URL برای آن‌ها هدف‌گذاری شده است.")
+    col3.metric("🧠 موضوعات منحصر به فرد", summary.get('unique_topics', 'N/A'), help="تعداد دسته‌بندی‌های موضوعی شناسایی‌شده توسط Gemini.")
+    col4.metric("⏱️ زمان تحلیل (ثانیه)", summary.get('analysis_duration_seconds', 'N/A'))
+
+    st.markdown("---")
+    
+    # --- Interactive Results Exploration ---
+    st.subheader("👇 نتایج را بررسی و فیلتر کنید")
+    filter_option = st.selectbox("نمایش نتایج:", ["🚨 فقط مشکلات", "همه موضوعات"])
+    
+    display_df = results_df.copy()
+    if filter_option == "🚨 فقط مشکلات":
+        display_df = display_df[display_df['Cannibalization Issue'].str.contains('بله')]
+
+    if not display_df.empty:
+        # --- Data Visualization ---
+        chart_df = display_df[display_df['Severity'] > 0].nlargest(10, 'Severity').sort_values('Severity', ascending=True)
+        chart = alt.Chart(chart_df).mark_bar().encode(
+            x=alt.X('Severity:Q', title='امتیاز شدت مشکل'),
+            y=alt.Y('Topic:N', sort='-x', title='موضوع'),
+            tooltip=['Topic', 'Keyword Count', 'Unique URLs', 'Severity']
+        ).properties(
+            title='۱۰ موضوع با بیشترین شدت هم‌نوع‌خواری'
+        )
+        st.altair_chart(chart, use_container_width=True)
+
+        # --- Actionable Data Table ---
+        # Make URLs clickable before displaying
+        display_df_html = make_urls_clickable(display_df)
+        st.write("جدول کامل نتایج (مرتب‌شده بر اساس شدت مشکل):")
+        st.write(display_df_html.to_html(escape=False, index=False), unsafe_allow_html=True)
+
+        # --- Download Button ---
+        csv = results_df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📥 دانلود همه نتایج به صورت CSV",
+            data=csv,
+            file_name=f'cannibalization_results_{site_url}.csv',
+            mime='text/csv',
+            use_container_width=True
+        )
     else:
-        st.info("اطلاعات را در پنل سمت راست وارد کرده و روی دکمه 'شروع تحلیل' کلیک کنید.")
+        st.success("🎉 هیچ مشکلی یافت نشد!")
 
-with tab2:
-    st.header("راهنمای استفاده از ابزار")
-    st.markdown("""
-    برای استفاده صحیح از این ابزار، لطفاً مراحل زیر را دنبال کنید:
-
-    **۱. آماده‌سازی فایل اکسل:**
-    - یک فایل اکسل (`.xlsx`) ایجاد کنید.
-    - دو ستون با نام‌های دقیق `Keyword` و `URL` بسازید.
-    - در ستون `Keyword`، کلمات کلیدی مورد نظر خود را وارد کنید.
-    - در ستون `URL`، آدرس صفحه‌ای که برای آن کلمه کلیدی هدف‌گذاری کرده‌اید را وارد کنید.
-    
-    *نمونه فایل:*
-    | Keyword                 | URL                                     |
-    |-------------------------|-----------------------------------------|
-    | خرید هاست ارزان         | https://aiprovider.org/hosting          |
-    | بهترین هاست وردپرس     | https://aiprovider.org/wordpress-hosting|
-    | هاست لینوکس ایران      | https://aiprovider.org/hosting          |
-
-    **۲. دریافت کلید API گوگل:**
-    - به [Google AI Studio](https://aistudio.google.com/app/apikey) بروید و یک کلید API جدید بسازید.
-    - کلید ساخته شده را در فیلد مربوطه در پنل کناری وارد کنید. این کلید برای استفاده از مدل هوش مصنوعی Gemini جهت دسته‌بندی موضوعی کلمات کلیدی شما ضروری است.
-
-    **۳. وارد کردن اطلاعات:**
-    - کلید API، آدرس کامل وب‌سایت و کشور مورد نظر را در پنل کناری وارد کنید.
-    - فایل اکسل آماده شده را آپلود کنید.
-
-    **۴. شروع تحلیل:**
-    - روی دکمه "شروع تحلیل" کلیک کنید و منتظر بمانید تا نتایج نمایش داده شوند.
-    """)
-
-with tab3:
-    st.header("درباره این ابزار")
-    st.markdown("""
-    این ابزار برای کمک به متخصصان سئو جهت شناسایی و حل مشکل **هم‌نوع‌خواری کلمات کلیدی (Keyword Cannibalization)** طراحی شده است.
-    
-    **هم‌نوع‌خواری چه زمانی رخ می‌دهد؟**
-    زمانی که چندین صفحه از وب‌سایت شما برای یک کلمه کلیدی یا یک موضوع مشابه در نتایج جستجوی گوگل با یکدیگر رقابت می‌کنند. این امر باعث سردرگمی موتورهای جستجو شده و می‌تواند به رتبه هر دو صفحه آسیب بزند.
-    
-    **این ابزار چگونه کار می‌کند؟**
-    ۱. **دسته‌بندی موضوعی:** با استفاده از هوش مصنوعی Google Gemini، کلمات کلیدی شما را بر اساس موضوع و قصد کاربر (Intent) دسته‌بندی می‌کند.
-    ۲. **تحلیل URLها:** در هر گروه موضوعی، URLهایی که شما برای کلمات کلیدی آن گروه هدف‌گذاری کرده‌اید را بررسی می‌کند.
-    ۳. **شناسایی مشکل:** اگر برای یک موضوع واحد، بیش از یک URL منحصر به فرد پیدا شود، آن را به عنوان یک مشکل "هم‌نوع‌خواری" شناسایی و گزارش می‌کند.
-    """)
+# C. Initial state of the app
+else:
+    tab_guide, tab_about = st.tabs(["📄 راهنمای سریع", "💡 درباره ابزار"])
+    with tab_guide:
+        st.info("برای شروع، پارامترهای تحلیل را در پنل کناری وارد کرده و روی دکمه 'شروع تحلیل' کلیک کنید.")
+        st.markdown("""
+        **راهنمای فایل اکسل:**
+        - فایل شما می‌تواند خروجی مستقیم **Google Search Console** باشد.
+        - این ابزار به طور هوشمند ستون‌های حاوی `Query` یا `Keyword` را به عنوان کلمه کلیدی، و ستون‌های حاوی `Page` یا `URL` را به عنوان آدرس شناسایی می‌کند.
+        """)
+    with tab_about:
+        st.markdown("""
+        این ابزار با استفاده از هوش مصنوعی **Google Gemini**، کلمات کلیدی شما را بر اساس **قصد کاربر (Search Intent)** به موضوعات مختلف دسته‌بندی می‌کند. سپس با بررسی URLهای هدف‌گذاری شده برای هر موضوع، مشکلات هم‌نوع‌خواری را شناسایی کرده و به شما در اولویت‌بندی و حل آن‌ها کمک می‌کند.
+        """)
