@@ -1,97 +1,118 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
-from fastapi.middleware.cors import CORSMiddleware
+import streamlit as st
 import pandas as pd
 import io
-from keyword_cannibalization import run_cannibalization_analysis
-from pydantic import BaseModel
-from typing import Optional
 import json
+from keyword_cannibalization import run_cannibalization_analysis
+from typing import Optional
 
-app = FastAPI(title="Keyword Cannibalization API")
-
-# Enable CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# --- Page Configuration ---
+st.set_page_config(
+    page_title="SEO Cannibalization Analysis",
+    page_icon="🕸️",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-class AnalysisConfig(BaseModel):
-    title_method: str = 'tfidf'
-    url_method: str = 'thefuzz'
-    title_threshold: float = 0.8
-    url_threshold: float = 0.8
-    openai_api_key: Optional[str] = None
-    openai_base_url: Optional[str] = None
-    openai_model: str = "text-embedding-ada-002"
-    use_persian_preprocessing: bool = True
+# --- Main Application UI ---
 
-async def read_file_content(file: UploadFile) -> pd.DataFrame:
-    """Read file content based on file type"""
-    contents = await file.read()
-    
-    try:
-        if file.filename.endswith('.csv'):
-            # Read CSV file
-            df = pd.read_csv(io.StringIO(contents.decode('utf-8')))
-        elif file.filename.endswith(('.xlsx', '.xls')):
-            # Read Excel file
-            df = pd.read_excel(io.BytesIO(contents))
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="Unsupported file format. Please upload a CSV or Excel file."
-            )
-        
-        return df
-    except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Error reading file: {str(e)}"
-        )
+st.title("📊 SEO Keyword Cannibalization Analysis Tool")
+st.markdown("""
+    این ابزار به شما کمک می‌کند تا مشکلات "هم‌نوع‌خواری کلمات کلیدی" را در وب‌سایت خود شناسایی کنید. 
+    یک فایل اکسل حاوی کلمات کلیدی و URLهای مربوطه را آپلود کنید تا تحلیل شروع شود.
+""")
 
-@app.post("/analyze")
-async def analyze_cannibalization(
-    file: UploadFile = File(...),
-    config: str = Form(...)
-):
-    try:
-        # Parse the config JSON string
-        config_dict = json.loads(config)
-        config_obj = AnalysisConfig(**config_dict)
-        
-        # Read the uploaded file
-        df = await read_file_content(file)
-        
-        # Run analysis
-        results_df, analysis_data = run_cannibalization_analysis(
-            df,
-            title_method=config_obj.title_method,
-            url_method=config_obj.url_method,
-            title_threshold=config_obj.title_threshold,
-            url_threshold=config_obj.url_threshold,
-            openai_api_key=config_obj.openai_api_key,
-            openai_base_url=config_obj.openai_base_url,
-            openai_model=config_obj.openai_model,
-            use_persian_preprocessing=config_obj.use_persian_preprocessing
-        )
-        
-        # Convert results to dict for JSON response
-        results = results_df.to_dict(orient='records')
-        
-        return {
-            "status": "success",
-            "results": results,
-            "total_matches": len(results)
-        }
-        
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid config format")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# --- Sidebar for Inputs ---
+with st.sidebar:
+    st.header("⚙️ تنظیمات تحلیل")
 
-@app.get("/")
-async def root():
-    return {"message": "Keyword Cannibalization API is running"} 
+    # 1. File Upload
+    uploaded_file = st.file_uploader(
+        "۱. فایل اکسل خود را آپلود کنید",
+        type=['xlsx'],
+        help="فایل اکسل باید حداقل دو ستون به نام‌های 'Keyword' و 'URL' داشته باشد."
+    )
+
+    # 2. OpenAI API Key
+    openai_api_key = st.text_input(
+        "۲. کلید OpenAI API",
+        type="password",
+        placeholder="sk-...",
+        help="برای استفاده از مدل‌های زبان برای دسته‌بندی موضوعی کلمات کلیدی ضروری است."
+    )
+
+    # 3. Website Domain
+    site_url = st.text_input(
+        "۳. آدرس وب‌سایت",
+        placeholder="https.example.com",
+        help="آدرس کامل وب‌سایت خود را وارد کنید (مثلاً https://www.aiprovider.org)."
+    )
+
+    # 4. Country Selection
+    country = st.selectbox(
+        "۴. کشور مورد نظر برای جستجو",
+        ['ir', 'us', 'de', 'fr', 'es', 'it', 'uk', 'ca', 'au'],
+        index=0,  # Default to 'ir'
+        help="کشوری که می‌خواهید رتبه‌بندی کلمات کلیدی در آن بررسی شود."
+    )
+
+    # 5. Analysis Button
+    st.markdown("---")
+    run_button = st.button("🚀 شروع تحلیل", type="primary", use_container_width=True)
+
+# --- Main Panel for Outputs ---
+
+if run_button:
+    # Input validation
+    if not uploaded_file:
+        st.error("لطفاً یک فایل اکسل آپلود کنید.")
+    elif not openai_api_key:
+        st.error("لطفاً کلید OpenAI API خود را وارد کنید.")
+    elif not site_url:
+        st.error("لطفاً آدرس وب‌سایت خود را وارد کنید.")
+    else:
+        try:
+            with st.spinner("لطفاً صبر کنید، تحلیل در حال انجام است. این فرآیند ممکن است چند دقیقه طول بکشد..."):
+                # Read the uploaded file into a pandas DataFrame
+                df = pd.read_excel(uploaded_file)
+                st.info(f"فایل شما با موفقیت خوانده شد. تعداد {len(df)} کلمه کلیدی برای تحلیل یافت شد.")
+
+                # Prepare the configuration dictionary
+                config = {
+                    "openai_api_key": openai_api_key,
+                    "site_url": site_url,
+                    "country": country
+                }
+
+                # Run the main analysis function
+                result_df, analysis_summary = run_cannibalization_analysis(df, config)
+
+                # --- Display Results ---
+                st.success("✅ تحلیل با موفقیت به پایان رسید!")
+
+                st.subheader("📝 خلاصه تحلیل")
+                st.json(analysis_summary)
+
+                st.subheader("📄 نتایج کامل")
+                st.dataframe(result_df)
+
+                # Provide a download button for the results
+                @st.cache_data
+                def convert_df_to_csv(df_to_convert):
+                    return df_to_convert.to_csv(index=False).encode('utf-8')
+
+                csv = convert_df_to_csv(result_df)
+
+                st.download_button(
+                    label="📥 دانلود نتایج به صورت CSV",
+                    data=csv,
+                    file_name='seo_cannibalization_results.csv',
+                    mime='text/csv',
+                    use_container_width=True
+                )
+
+        except Exception as e:
+            st.error(f"متاسفانه در حین تحلیل خطایی رخ داد:")
+            st.exception(e)
+
+else:
+    st.info("لطفاً تنظیمات را در منوی سمت چپ وارد کرده و روی دکمه 'شروع تحلیل' کلیک کنید.")
