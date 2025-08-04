@@ -75,31 +75,33 @@ def run_cannibalization_analysis(df: pd.DataFrame, config: Dict[str, Any]) -> Tu
     model_provider = config.get("model_provider", "gemini") # Default to Gemini
 
     # --- 1. Smart Input Validation & Column Standardization ---
-    df.columns = df.columns.str.strip() # Remove leading/trailing spaces from column names
-    
-    # Flexible column mapping
+    df.columns = df.columns.str.strip() # Remove leading/trailing spaces
+
     column_mapping = {}
     found_keyword = False
     found_url = False
 
+    # Define all possible names for keyword and URL columns
+    keyword_aliases = ['keyword', 'کلمه کلیدی', 'query', 'کوئری']
+    url_aliases = ['url', 'آدرس', 'permalink', 'page', 'صفحه']
+
     for col in df.columns:
         col_lower = col.lower()
-        if not found_keyword and ('keyword' in col_lower or 'کلمه کلیدی' in col_lower):
+        if not found_keyword and any(alias in col_lower for alias in keyword_aliases):
             column_mapping[col] = 'Keyword'
             found_keyword = True
-        elif not found_url and ('url' in col_lower or 'آدرس' in col_lower or 'permalink' in col_lower):
+        elif not found_url and any(alias in col_lower for alias in url_aliases):
             column_mapping[col] = 'URL'
             found_url = True
-            
+    
     df = df.rename(columns=column_mapping)
 
     if 'Keyword' not in df.columns or 'URL' not in df.columns:
-        raise ValueError("فایل اکسل شما باید دارای ستون‌هایی برای 'کلمه کلیدی' و 'آدرس (URL)' باشد. نام‌های فعلی ستون‌های شما: " + str(list(df.columns)))
-        
-
-    keywords = df['Keyword'].dropna().unique().tolist()
-    if not keywords:
-        raise ValueError("هیچ کلمه کلیدی معتبری در فایل اکسل شما یافت نشد.")
+        error_message = (
+            "فایل اکسل شما باید دارای ستون‌هایی برای 'کلمه کلیدی' و 'آدرس (URL)' باشد. "
+            f"نام‌های فعلی ستون‌های شما: {list(df.columns)}"
+        )
+        raise ValueError(error_message)
 
     # --- 2. Topic Modeling using AI ---
     logging.info(f"Starting topic modeling for {len(keywords)} keywords using {model_provider}...")
