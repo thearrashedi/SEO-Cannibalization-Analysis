@@ -1,36 +1,19 @@
-# Web Framework
 fastapi>=0.109.0
 uvicorn>=0.27.0
 streamlit>=1.31.0
-
-# Data Processing
-pandas>=2.2.0
-numpy>=1.26.0
+gspread>=5.12.0
+oauth2client>=4.1.3
+pandas==1.5.3  # Pinned for compatibility
+numpy==1.24.4  # Pinned for compatibility with older scipy/gensim
 openpyxl>=3.1.0
-
-# Text Processing and Similarity
+scipy==1.10.1   # Pinned to a version compatible with gensim
+gensim==4.3.0   # Pinned to a specific version
 scikit-learn>=1.4.0
 thefuzz>=0.20.0
 python-Levenshtein>=0.23.0
 sentence-transformers>=2.5.0
-
-# Visualization
+gspread-dataframe>=3.3.0
+google-api-python-client>=2.115.0
 plotly>=5.18.0
 htmlmin>=0.1.12
-
-# OpenAI Integration
-langchain-openai>=0.0.5
-openai>=1.12.0
-
-# Utilities
-python-multipart>=0.0.9
-pydantic>=2.6.0
-typing-extensions>=4.9.0
-requests>=2.31.0
-tqdm>=4.66.0
-python-dotenv>=1.0.0
-aiofiles>=23.2.1
-
-# Optional: Persian Text Processing
-hazm>=0.7.0
-nltk>=3.8.0
+hazm>=0.9.3
