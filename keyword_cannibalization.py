@@ -74,9 +74,28 @@ def run_cannibalization_analysis(df: pd.DataFrame, config: Dict[str, Any]) -> Tu
     api_key = config.get("api_key")
     model_provider = config.get("model_provider", "gemini") # Default to Gemini
 
-    # --- 1. Input Validation ---
+    # --- 1. Smart Input Validation & Column Standardization ---
+    df.columns = df.columns.str.strip() # Remove leading/trailing spaces from column names
+    
+    # Flexible column mapping
+    column_mapping = {}
+    found_keyword = False
+    found_url = False
+
+    for col in df.columns:
+        col_lower = col.lower()
+        if not found_keyword and ('keyword' in col_lower or 'کلمه کلیدی' in col_lower):
+            column_mapping[col] = 'Keyword'
+            found_keyword = True
+        elif not found_url and ('url' in col_lower or 'آدرس' in col_lower or 'permalink' in col_lower):
+            column_mapping[col] = 'URL'
+            found_url = True
+            
+    df = df.rename(columns=column_mapping)
+
     if 'Keyword' not in df.columns or 'URL' not in df.columns:
-        raise ValueError("فایل اکسل شما باید حتما دارای دو ستون به نام‌های 'Keyword' و 'URL' باشد.")
+        raise ValueError("فایل اکسل شما باید دارای ستون‌هایی برای 'کلمه کلیدی' و 'آدرس (URL)' باشد. نام‌های فعلی ستون‌های شما: " + str(list(df.columns)))
+        
 
     keywords = df['Keyword'].dropna().unique().tolist()
     if not keywords:
