@@ -2,28 +2,80 @@ import pandas as pd
 import json
 import time
 import logging
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, List
 import google.generativeai as genai
-from langchain_openai import OpenAIEmbeddings
 
-# Configure logging
+# --- 1. Configuration & Constants ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def get_topic_from_gemini(keywords: list, api_key: str) -> Dict[str, str]:
+# Define constants for column names to avoid typos and for easier maintenance
+KEYWORD_COL = 'Keyword'
+URL_COL = 'URL'
+TOPIC_COL = 'Topic'
+
+def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Groups keywords into topics using Google's Gemini model.
+    Cleans and validates the input DataFrame.
+    - Standardizes column names.
+    - Removes empty rows and duplicates.
+    """
+    if df is None or df.empty:
+        raise ValueError("فایل اکسل آپلود شده خالی است.")
+
+    df.columns = df.columns.str.strip()  # Remove leading/trailing spaces from column names
+
+    # Flexible column mapping to find keyword and URL columns
+    column_mapping = {}
+    keyword_aliases = ['keyword', 'کلمه کلیدی', 'query', 'کوئری']
+    url_aliases = ['url', 'آدرس', 'permalink', 'page', 'صفحه']
+
+    for col in df.columns:
+        col_lower = col.lower()
+        if not column_mapping.get(KEYWORD_COL) and any(alias in col_lower for alias in keyword_aliases):
+            column_mapping[col] = KEYWORD_COL
+        elif not column_mapping.get(URL_COL) and any(alias in col_lower for alias in url_aliases):
+            column_mapping[col] = URL_COL
+            
+    df = df.rename(columns=column_mapping)
+
+    # Final validation check
+    if KEYWORD_COL not in df.columns or URL_COL not in df.columns:
+        error_message = (
+            f"فایل اکسل شما باید دارای ستون‌هایی برای کلمه کلیدی و آدرس (URL) باشد. "
+            f"نام‌های ستون شناسایی‌شده: {list(df.columns)}"
+        )
+        raise ValueError(error_message)
+
+    # Clean data: drop rows with missing keywords or URLs, and remove duplicate keywords
+    df.dropna(subset=[KEYWORD_COL, URL_COL], inplace=True)
+    df.drop_duplicates(subset=[KEYWORD_COL], inplace=True)
+    
+    if df.empty:
+        raise ValueError("پس از پاکسازی، هیچ ردیف معتبری در فایل اکسل باقی نماند.")
+
+    return df
+
+def get_topic_from_gemini(keywords: List[str], api_key: str, model_name: str = 'gemini-1.5-flash-latest') -> Dict[str, str]:
+    """
+    Groups keywords into topics using Google's Gemini model with batch processing.
     """
     if not api_key:
-        logging.warning("Gemini API key not provided. Falling back to general categorization.")
+        logging.warning("کلید Gemini API ارائه نشده. از دسته‌بندی عمومی استفاده می‌شود.")
         return {kw: "General" for kw in keywords}
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(model_name)
     
-    try:
-        # Configuration is done in app.py
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        
-        # Create a single prompt for batch processing for efficiency
-        keyword_list_str = "\n".join([f"- {kw}" for kw in keywords])
-        
+    all_topic_map = {}
+    batch_size = 200  # Process 200 keywords at a time to stay within API limits
+    num_batches = (len(keywords) + batch_size - 1) // batch_size
+
+    for i in range(0, len(keywords), batch_size):
+        batch_keywords = keywords[i:i + batch_size]
+        current_batch_num = (i // batch_size) + 1
+        logging.info(f"پردازش دسته {current_batch_num}/{num_batches} از کلمات کلیدی...")
+
+        keyword_list_str = "\n".join([f"- {kw}" for kw in batch_keywords])
         prompt = f"""
         Based on user search intent, group the following SEO keywords into concise, relevant topics.
         The topic name should be 1-3 words. The goal is to group keywords that a user would search for to solve the same problem.
@@ -36,95 +88,42 @@ def get_topic_from_gemini(keywords: list, api_key: str) -> Dict[str, str]:
         JSON Output:
         """
         
-        response = model.generate_content(prompt)
-        # Clean the response to ensure it's valid JSON
-        cleaned_response = response.text.strip().replace("```json", "").replace("```", "").strip()
+        try:
+            response = model.generate_content(prompt)
+            cleaned_response = response.text.strip().replace("```json", "").replace("```", "").strip()
+            
+            try:
+                batch_topic_map = json.loads(cleaned_response)
+                all_topic_map.update(batch_topic_map)
+            except json.JSONDecodeError:
+                logging.error(f"پاسخ Gemini در دسته {current_batch_num} فرمت JSON معتبر نداشت. پاسخ دریافتی: {cleaned_response}")
+                # Fallback for this batch
+                for kw in batch_keywords:
+                    all_topic_map[kw] = "JSON Format Error"
+
+        except Exception as e:
+            logging.error(f"خطا در ارتباط با Gemini API در دسته {current_batch_num}: {e}")
+            for kw in batch_keywords:
+                all_topic_map[kw] = "API Error"
         
-        topic_map = json.loads(cleaned_response)
-        
-        # Ensure all keywords from input are in the output map
-        for kw in keywords:
-            if kw not in topic_map:
-                topic_map[kw] = "Uncategorized"
-                
-        return topic_map
-        
-    except Exception as e:
-        logging.error(f"Error with Gemini API: {e}")
-        # Fallback to a general topic if API fails
-        return {kw: "API Error - General" for kw in keywords}
+        time.sleep(1) # Be respectful to the API rate limits
 
-def get_topic_from_openai(keywords: list, api_key: str) -> Dict[str, str]:
+    # Ensure all keywords have a topic, even if the API missed some
+    for kw in keywords:
+        if kw not in all_topic_map:
+            all_topic_map[kw] = "Uncategorized"
+            
+    return all_topic_map
+
+def _analyze_topics(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Placeholder for OpenAI topic modeling. 
-    For this version, we will just use a simplified logic or you can integrate a full OpenAI call.
+    Performs the core cannibalization analysis on a DataFrame that already has topics.
     """
-    logging.warning("OpenAI topic modeling is not fully implemented in this version. Using general categorization.")
-    # You can add a full OpenAI API call here if needed in the future.
-    return {kw: "General (OpenAI)" for kw in keywords}
-
-def run_cannibalization_analysis(df: pd.DataFrame, config: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    """
-    Main function to run the cannibalization analysis.
-    This version is simplified to focus on topic modeling and URL analysis.
-    """
-    start_time = time.time()
-    
-    # Extract config values
-    api_key = config.get("api_key")
-    model_provider = config.get("model_provider", "gemini") # Default to Gemini
-
-    # --- 1. Smart Input Validation & Column Standardization ---
-    df.columns = df.columns.str.strip() # Remove leading/trailing spaces
-
-    column_mapping = {}
-    found_keyword = False
-    found_url = False
-
-    # Define all possible names for keyword and URL columns
-    keyword_aliases = ['keyword', 'کلمه کلیدی', 'query', 'کوئری']
-    url_aliases = ['url', 'آدرس', 'permalink', 'page', 'صفحه']
-
-    for col in df.columns:
-        col_lower = col.lower()
-        if not found_keyword and any(alias in col_lower for alias in keyword_aliases):
-            column_mapping[col] = 'Keyword'
-            found_keyword = True
-        elif not found_url and any(alias in col_lower for alias in url_aliases):
-            column_mapping[col] = 'URL'
-            found_url = True
-    
-    df = df.rename(columns=column_mapping)
-
-    if 'Keyword' not in df.columns or 'URL' not in df.columns:
-        error_message = (
-            "فایل اکسل شما باید دارای ستون‌هایی برای 'کلمه کلیدی' و 'آدرس (URL)' باشد. "
-            f"نام‌های فعلی ستون‌های شما: {list(df.columns)}"
-        )
-        raise ValueError(error_message)
-
-    # --- 2. Topic Modeling using AI ---
-    logging.info(f"Starting topic modeling for {len(keywords)} keywords using {model_provider}...")
-    
-    topic_map = {}
-    if model_provider == "gemini":
-        topic_map = get_topic_from_gemini(keywords, api_key)
-    else: # Fallback to OpenAI or other models in the future
-        topic_map = get_topic_from_openai(keywords, api_key)
-    
-    df['Topic'] = df['Keyword'].map(topic_map)
-    logging.info("Topic modeling complete.")
-
-    # --- 3. Cannibalization Analysis ---
     analysis_results = []
-    # Group by the generated topic
-    grouped_by_topic = df.groupby('Topic')
+    grouped_by_topic = df.groupby(TOPIC_COL)
 
     for topic, group in grouped_by_topic:
-        # Find all unique URLs targeted for this single topic
-        unique_urls = group['URL'].dropna().unique().tolist()
-        
-        # A cannibalization issue exists if more than one unique URL targets the same topic
+        unique_urls = group[URL_COL].dropna().unique().tolist()
         issue_exists = len(unique_urls) > 1
         
         analysis_results.append({
@@ -132,21 +131,46 @@ def run_cannibalization_analysis(df: pd.DataFrame, config: Dict[str, Any]) -> Tu
             'Keyword Count': len(group),
             'Unique URLs': len(unique_urls),
             'URLs': " | ".join(unique_urls),
-            'Keywords': ", ".join(group['Keyword'].tolist()),
-            'Cannibalization Issue': '🚨 Yes' if issue_exists else '✅ No'
+            'Keywords': ", ".join(group[KEYWORD_COL].tolist()),
+            'Cannibalization Issue': '🚨 بله' if issue_exists else '✅ خیر'
         })
 
     result_df = pd.DataFrame(analysis_results)
-    # Sort to show issues first
-    result_df = result_df.sort_values(by='Cannibalization Issue', ascending=False)
+    # Sort to show issues first, then by keyword count
+    result_df = result_df.sort_values(by=['Cannibalization Issue', 'Keyword Count'], ascending=[False, False])
+    return result_df
+
+def run_cannibalization_analysis(df: pd.DataFrame, config: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Main function to run the cannibalization analysis.
+    """
+    start_time = time.time()
+    
+    # --- 1. Preparation & Validation ---
+    logging.info("شروع پاکسازی و اعتبارسنجی دیتافریم...")
+    df = _prepare_dataframe(df)
+    logging.info("پاکسازی و اعتبارسنجی با موفقیت انجام شد.")
+
+    keywords = df[KEYWORD_COL].tolist()
+
+    # --- 2. Topic Modeling using AI ---
+    logging.info(f"شروع دسته‌بندی موضوعی برای {len(keywords)} کلمه کلیدی...")
+    topic_map = get_topic_from_gemini(keywords, config.get("api_key"))
+    df[TOPIC_COL] = df[KEYWORD_COL].map(topic_map)
+    logging.info("دسته‌بندی موضوعی با موفقیت به پایان رسید.")
+
+    # --- 3. Cannibalization Analysis ---
+    logging.info("شروع تحلیل هم‌نوع‌خواری...")
+    result_df = _analyze_topics(df)
+    logging.info("تحلیل با موفقیت انجام شد.")
     
     end_time = time.time()
     
     # --- 4. Create Summary ---
     analysis_summary = {
         "total_keywords": len(df),
-        "unique_topics": df['Topic'].nunique(),
-        "total_issues_found": int(result_df['Cannibalization Issue'].str.contains('Yes').sum()),
+        "unique_topics": df[TOPIC_COL].nunique(),
+        "total_issues_found": int(result_df['Cannibalization Issue'].str.contains('بله').sum()),
         "analysis_duration_seconds": round(end_time - start_time, 2)
     }
 
