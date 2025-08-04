@@ -7,7 +7,7 @@ pandas==1.5.3
 numpy==1.24.4
 openpyxl>=3.1.0
 scipy==1.10.1
-gensim==4.3.1   # <-- The ONLY change is here!
+gensim==4.3.1
 scikit-learn>=1.4.0
 thefuzz>=0.20.0
 python-Levenshtein>=0.23.0
@@ -17,3 +17,4 @@ google-api-python-client>=2.115.0
 plotly>=5.18.0
 htmlmin>=0.1.12
 hazm>=0.9.3
+langchain-openai  # <-- The new line you just added!
